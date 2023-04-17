@@ -1,0 +1,14 @@
+# Editors
+.vscode
+.idea
+
+# Python
+__pycache__
+.pyc
+.pytest_cache
+.ipynb_checkpoints
+.ruff_cache
+.venv
+
+# MacOs
+.DS_Store
