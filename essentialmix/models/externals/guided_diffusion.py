@@ -11,6 +11,31 @@ from abc import abstractmethod
 NUM_CLASSES = 1000  # imagenet
 
 
+def convert_module_to_f16(l):
+    """
+    Convert primitive modules to float16.
+    """
+    if isinstance(l, (nn.Conv1d, nn.Conv2d, nn.Conv3d)):
+        l.weight.data = l.weight.data.half()
+        if l.bias is not None:
+            l.bias.data = l.bias.data.half()
+
+
+def convert_module_to_f32(l):
+    """
+    Convert primitive modules to float32, undoing convert_module_to_f16().
+    """
+    if isinstance(l, (nn.Conv1d, nn.Conv2d, nn.Conv3d)):
+        l.weight.data = l.weight.data.float()
+        if l.bias is not None:
+            l.bias.data = l.bias.data.float()
+
+
+class GroupNorm32(nn.GroupNorm):
+    def forward(self, x):
+        return super().forward(x.float()).type(x.dtype)
+
+
 def zero_module(module):
     """
     Zero out the parameters of a module and return it.
@@ -142,6 +167,7 @@ class CheckpointFunction(th.autograd.Function):
         del output_tensors
         return (None, None) + input_grads
 
+
 class Upsample(nn.Module):
     """
     An upsampling layer with an optional convolution.
@@ -203,6 +229,7 @@ class Downsample(nn.Module):
         assert x.shape[1] == self.channels
         return self.op(x)
 
+
 class ResBlock(TimestepBlock):
     """
     A residual block that can optionally change the number of channels.
@@ -243,7 +270,7 @@ class ResBlock(TimestepBlock):
         self.use_scale_shift_norm = use_scale_shift_norm
 
         self.in_layers = nn.Sequential(
-            nn.GroupNorm(32, channels),
+            GroupNorm32(32, channels),
             nn.SiLU(),
             conv_nd(dims, channels, self.out_channels, 3, padding=1),
         )
@@ -267,7 +294,7 @@ class ResBlock(TimestepBlock):
             ),
         )
         self.out_layers = nn.Sequential(
-            nn.GroupNorm(32, self.out_channels),
+            GroupNorm32(32, self.out_channels),
             nn.SiLU(),
             nn.Dropout(p=dropout),
             zero_module(
@@ -314,11 +341,10 @@ class ResBlock(TimestepBlock):
             h = out_norm(h) * (1 + scale) + shift
             h = out_rest(h)
         else:
-            print("H shape:", h.shape)
-            print("Emb out shape", emb_out.shape)
             h = h + emb_out
             h = self.out_layers(h)
         return self.skip_connection(x) + h
+
 
 class QKVAttention(nn.Module):
     """
@@ -371,16 +397,12 @@ class QKVAttentionLegacy(nn.Module):
         assert width % (3 * self.n_heads) == 0
         ch = width // (3 * self.n_heads)
         q, k, v = qkv.reshape(bs * self.n_heads, ch * 3, length).split(ch, dim=1)
-        # print(bs*self.n_heads, ch*3)
-        # print(q.shape, k.shape, v.shape)
         scale = 1 / math.sqrt(math.sqrt(ch))
         weight = th.einsum(
             "bct,bcs->bts", q * scale, k * scale
         )  # More stable with f16 than dividing afterwards
-        # print("weight shape", weight.shape)
         weight = th.softmax(weight.float(), dim=-1).type(weight.dtype)
         a = th.einsum("bts,bcs->bct", weight, v)
-        # print("a shape", a.shape)
         return a.reshape(bs, -1, length)
 
 
@@ -410,7 +432,7 @@ class AttentionBlock(nn.Module):
             ), f"q,k,v channels {channels} is not divisible by num_head_channels {num_head_channels}"
             self.num_heads = channels // num_head_channels
         self.use_checkpoint = use_checkpoint
-        self.norm = nn.GroupNorm(32, channels)
+        self.norm = GroupNorm32(32, channels)
         self.qkv = conv_nd(1, channels, channels * 3, 1)
         if use_new_attention_order:
             # split qkv before split heads
@@ -427,13 +449,9 @@ class AttentionBlock(nn.Module):
     def _forward(self, x):
         b, c, *spatial = x.shape
         x = x.reshape(b, c, -1)
-        # print("x shape: ", x.shape)
         qkv = self.qkv(self.norm(x))
-        # print("qkv shape: ", qkv.shape)
         h = self.attention(qkv)
-        # print("h shape: ", h.shape)
         h = self.proj_out(h)
-        # print("proj shape: ", h.shape)
         return (x + h).reshape(b, c, *spatial)
 
 
@@ -552,7 +570,6 @@ class UNetModel(nn.Module):
                             use_new_attention_order=use_new_attention_order,
                         )
                     )
-                print(f"Adding {len(layers)} layers in input block")
                 self.input_blocks.append(TimestepEmbedSequential(*layers))
                 self._feature_size += ch
                 input_block_chans.append(ch)
@@ -655,10 +672,26 @@ class UNetModel(nn.Module):
                 self._feature_size += ch
 
         self.out = nn.Sequential(
-            nn.GroupNorm(32, ch),
+            GroupNorm32(32, ch),
             nn.SiLU(),
             zero_module(conv_nd(dims, input_ch, out_channels, 3, padding=1)),
         )
+
+    def convert_to_fp16(self):
+        """
+        Convert the torso of the model to float16.
+        """
+        self.input_blocks.apply(convert_module_to_f16)
+        self.middle_block.apply(convert_module_to_f16)
+        self.output_blocks.apply(convert_module_to_f16)
+
+    def convert_to_fp32(self):
+        """
+        Convert the torso of the model to float32.
+        """
+        self.input_blocks.apply(convert_module_to_f32)
+        self.middle_block.apply(convert_module_to_f32)
+        self.output_blocks.apply(convert_module_to_f32)
 
     def forward(self, x, timesteps, y=None):
         """
@@ -684,7 +717,6 @@ class UNetModel(nn.Module):
         for module in self.input_blocks:
             h = module(h, emb)
             hs.append(h)
-            print(module._get_name(), h.shape)
         h = self.middle_block(h, emb)
         for module in self.output_blocks:
             h = th.cat([h, hs.pop()], dim=1)
@@ -729,7 +761,6 @@ def create_model(
     for res in attention_resolutions.split(","):
         attention_ds.append(image_size // int(res))
 
-
     return UNetModel(
         image_size=image_size,
         in_channels=3,
@@ -750,42 +781,32 @@ def create_model(
         use_new_attention_order=use_new_attention_order,
     )
 
+
+def noise_model_defaults():
+    """
+    Defaults for image training.
+    """
+    return dict(
+        image_size=64,
+        num_channels=128,
+        num_res_blocks=2,
+        num_heads=4,
+        num_heads_upsample=-1,
+        num_head_channels=-1,
+        attention_resolutions="16,8",
+        channel_mult="",
+        dropout=0.0,
+        class_cond=False,
+        use_checkpoint=False,
+        use_scale_shift_norm=True,
+        resblock_updown=False,
+        use_fp16=False,
+        use_new_attention_order=False,
+    )
+
+
 if __name__ == '__main__':
-    def model_and_diffusion_defaults():
-        """
-        Defaults for image training.
-        """
-        return dict(
-            image_size=64,
-            num_channels=128,
-            num_res_blocks=2,
-            num_heads=4,
-            num_heads_upsample=-1,
-            num_head_channels=-1,
-            attention_resolutions="16,8",
-            channel_mult="",
-            dropout=0.0,
-            class_cond=False,
-            use_checkpoint=False,
-            use_scale_shift_norm=True,
-            resblock_updown=False,
-            use_fp16=False,
-            use_new_attention_order=False,
-        )
-
-    def inspect_model(model: UNetModel) -> None:
-        print(f"Image size: {model.image_size}")
-        print(f"Input channels: {model.in_channels}")
-        print(f"Model channels: {model.model_channels}")
-        print(f"Output channels: {model.out_channels}")
-        print(f"Num Res blocks: {model.num_res_blocks}")
-        print(f"Attention resolutions: {model.attention_resolutions}")
-        print(f"Channel multiplier: {model.channel_mult}")
-        print(f"Use learned convolutions?: {model.conv_resample}")
-        print(f"Num classes (if None it is not class-conditional): {model.num_classes}")
-
-
-    model = create_model(**model_and_diffusion_defaults())
+    model = create_model(**noise_model_defaults())
     inspect_model(model)
 
     print("time embedding")
@@ -794,6 +815,10 @@ if __name__ == '__main__':
 
     print("input blocks")
     print(model.input_blocks)
+    print("middle block")
+    print(model.middle_block)
+    print("output blocks")
+    print(model.output_blocks)
 
     from operator import mul
     from functools import reduce
@@ -803,7 +828,7 @@ if __name__ == '__main__':
         # print(f"{name} with shape {parameter.shape} -> total_params = {reduce(mul, parameter.shape)}")
         n_params += reduce(mul, parameter.shape)
 
-    print(f"Total number of parameters: {n_params*1e-6:.2f}M")
+    print(f"Total number of parameters: {n_params * 1e-6:.2f}M")
 
     x = torch.zeros((1, 3, 64, 64), dtype=torch.float32)
     timesteps = torch.ones(1, dtype=torch.float32).reshape(1)
