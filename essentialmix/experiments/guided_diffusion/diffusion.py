@@ -1,9 +1,11 @@
 import math
+import time
 
 import matplotlib.pyplot as plt
 import torch
+import torch.nn.functional as F
 
-from essentialmix.models.externals.guided_diffusion import UNetModel
+from essentialmix.models.externals.guided_diffusion import UNetModel, EncoderUNetModel
 
 from dataclasses import dataclass
 
@@ -27,12 +29,19 @@ def cosine_betas(num_diffusion_timesteps: int, s: float = 0.008, max_beta: float
 
 
 class GaussianDiffusion:
-    def __init__(self,
-        model: UNetModel, num_diffusion_timesteps: int,
-        noise_schedule: str = 'linear', sigma_learned: bool = False,
+    def __init__(
+        self,
+        model: UNetModel,
+        num_diffusion_timesteps: int,
+        classifier: EncoderUNetModel | None = None,
+        class_guidance_scale: float = 1.0,
+        noise_schedule: str = 'linear',
+        sigma_learned: bool = False,
         timestep_respacing: int | None = None,
     ):
         self.model = model
+        self.classifier = classifier
+        self.class_guidance_scale = class_guidance_scale
         self.num_diffusion_timesteps = num_diffusion_timesteps
         self.timestep_respacing = timestep_respacing
 
@@ -71,7 +80,9 @@ class GaussianDiffusion:
         _check_shape(self.sqrt_recipm1_alphas_cumprod)
 
         self.posterior_variance = ((1 - self.alpha_bar_prev) / (1 - self.alpha_bar)) * self.betas
-        self.log_posterior_variance = torch.log(torch.cat([torch.tensor([self.posterior_variance[1]]), self.posterior_variance[1:]], dim=0))
+        self.log_posterior_variance = torch.log(
+            torch.cat([torch.tensor([self.posterior_variance[1]]), self.posterior_variance[1:]], dim=0)
+        )
         self.posterior_mean_coef1 = self.betas * torch.sqrt(self.alpha_bar_prev) / (1.0 - self.alpha_bar)
         self.posterior_mean_coef2 = (1.0 - self.alpha_bar_prev) * torch.sqrt(self.alpha_t) / (1 - self.alpha_bar)
         _check_shape(self.posterior_variance)
@@ -81,17 +92,27 @@ class GaussianDiffusion:
 
         self.sigma_learned = sigma_learned
 
-    def call_model(self, x_t: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+    def call_model(self, x_t: torch.Tensor, t: torch.Tensor, y: torch.Tensor | None) -> torch.Tensor:
         assert x_t.shape[0] == t.shape[0]
         if self.steps is not None:
             # In case we use re-spacing, pick the correct corresponding t
-            return self.model(x_t, self.steps[t])
-        return self.model(x_t, t)
+            return self.model(x_t, self.steps[t], y)
+        return self.model(x_t, t, y)
 
     def index_and_broadcast(self, tensor: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
         return tensor[t].view([t.shape[0], 1, 1, 1])
 
-    def ddpm_denoise_at_t(self, x_t: torch.Tensor, t: int, pred_x_0: bool = True) -> torch.Tensor:
+    def class_gradient_guide(self, x, t, y):
+        with torch.enable_grad():
+            x_in = x.detach().requires_grad_(True)
+            logits = self.classifier(x_in, t)
+            log_probs = F.log_softmax(logits, dim=-1)
+            selected = log_probs[range(len(logits)), y.view(-1)]
+            return torch.autograd.grad(selected.sum(), x_in)[0] * self.class_guidance_scale
+
+    def ddpm_denoise_at_t(
+        self, x_t: torch.Tensor, t: int, y: torch.Tensor | None = None, pred_x_0: bool = True
+    ) -> torch.Tensor:
         # Assumption: t is equal for all the samples in the batch x_t
         if t == 0:
             z = 0  # No noise at the last timestep
@@ -101,7 +122,7 @@ class GaussianDiffusion:
         t = torch.tensor([t] * x_t.shape[0])
         if self.sigma_learned:
             num_channels = x_t.shape[1]
-            model_output = self.call_model(x_t, t)
+            model_output = self.call_model(x_t, t, y)
             assert model_output.shape[1] == num_channels * 2
             model_noise, v = torch.split(model_output, model_output.shape[1] // 2, dim=1)
 
@@ -130,12 +151,18 @@ class GaussianDiffusion:
                     - ((1 - alpha_t) / torch.sqrt(1 - self.index_and_broadcast(self.alpha_bar, t))) * model_noise
                 )
 
+            if y is not None:
+                # Class guide
+                x_prev.add_(self.class_gradient_guide(x_t, t, y) * torch.exp(log_variance))
+
             x_prev += torch.exp(0.5 * log_variance) * z
         else:
             raise NotImplementedError("Fixed sigma not implemented")
         return x_prev
 
-    def ddim_denoise_at_t(self, x_t: torch.Tensor, t: int, eta: float = 0.0) -> torch.Tensor:
+    def ddim_denoise_at_t(
+        self, x_t: torch.Tensor, t: int, y: torch.Tensor | None = None, eta: float = 0.0
+    ) -> torch.Tensor:
         # Assumption: t is equal for all the samples in the batch x_t
         if t == 0:
             z = 0  # No noise at the last timestep
@@ -145,20 +172,20 @@ class GaussianDiffusion:
         t = torch.tensor([t] * x_t.shape[0])
         if self.sigma_learned:
             num_channels = x_t.shape[1]
-            model_output = self.call_model(x_t, t)
+            model_output = self.call_model(x_t, t, y)
             model_noise, _ = torch.split(model_output, model_output.shape[1] // 2, dim=1)
             assert model_noise.shape[1] == num_channels
+
+            if y is not None:
+                # Class guide
+                model_noise.add_(
+                    - torch.sqrt(1 - self.index_and_broadcast(self.alpha_bar, t)) * self.class_gradient_guide(x_t, t, y)
+                )
 
             x_0 = (
                 self.index_and_broadcast(self.sqrt_recip_alphas_cumprod, t) * x_t
                 - self.index_and_broadcast(self.sqrt_recipm1_alphas_cumprod, t) * model_noise
             )
-
-            # We can use this instead of model noise in the following
-            # eps = (
-            #     (self.index_and_broadcast(self.sqrt_recip_alphas_cumprod, t) * x_t - x_0)
-            #     / self.index_and_broadcast(self.sqrt_recipm1_alphas_cumprod, t)
-            # )
 
             # Eta interpolates between DDIM (eta=0) and DDPM (eta=1)
             alpha_bar = self.index_and_broadcast(self.alpha_bar, t)
@@ -171,19 +198,20 @@ class GaussianDiffusion:
 
             x_prev = (
                 torch.sqrt(alpha_bar_prev) * x_0
-                + torch.sqrt(1 - alpha_bar_prev - sigma**2) * model_noise
+                + torch.sqrt(1 - alpha_bar_prev - sigma ** 2) * model_noise
             )
             x_prev += sigma * z
         else:
             raise NotImplementedError("Fixed sigma not implemented")
         return x_prev
 
-    def denoise(self, batch_size: int = 1, use_ddim=False) -> dict:
+    def denoise(self, batch_size: int = 1, y: torch.Tensor | None = None, use_ddim=False) -> dict:
         x = torch.randn(size=(batch_size, self.model.in_channels, self.model.image_size, self.model.image_size))
         denoise_fn = self.ddim_denoise_at_t if use_ddim else self.ddpm_denoise_at_t
         for t in range(self.denoise_timesteps)[::-1]:
-            print(f"{'DDIM' if use_ddim else 'DDPM'} denoise timestep: {t}")
-            x = denoise_fn(x, t)
+            t0 = time.perf_counter()
+            x = denoise_fn(x, t, y)
+            print(f"Completed {'DDIM' if use_ddim else 'DDPM'} denoise at step: {t}. Took {time.perf_counter() - t0}")
             yield {
                 'timestep': t,
                 'denoised_x': x,
@@ -200,70 +228,3 @@ def inspect_model(model: UNetModel) -> None:
     print(f"Channel multiplier: {model.channel_mult}")
     print(f"Use learned convolutions?: {model.conv_resample}")
     print(f"Num classes (if None it is not class-conditional): {model.num_classes}")
-
-
-# class-unconditional lsun bedroom
-lsun_bedroom_config = {
-    "model": {
-        "attention_resolutions": "32,16,8",
-        "class_cond": False,
-        "dropout": 0.1,
-        "num_channels": 256,
-        "num_head_channels": 64,
-        "num_res_blocks": 2,
-        "resblock_updown": True,
-        "use_fp16": True,
-        "use_scale_shift_norm": True,
-        "image_size": 256,
-        "learn_sigma": True
-    },
-    "diffusion_process": {
-        "num_diffusion_timesteps": 1000,
-        "sigma_learned": True,
-        "noise_schedule": "linear",
-    },
-}
-
-
-if __name__ == '__main__':
-    from essentialmix.models.externals.guided_diffusion import create_model, noise_model_defaults
-    from collections import ChainMap
-
-    DEVICE = 'mps'
-
-    diffusion_config = lsun_bedroom_config['diffusion_process']
-    model_config = ChainMap(lsun_bedroom_config['model'], noise_model_defaults())
-
-    with torch.device(DEVICE):
-        model = create_model(**dict(model_config))
-        diffusion_process = GaussianDiffusion(
-            timestep_respacing=25,
-            model=model,
-            **lsun_bedroom_config['diffusion_process']
-        )
-
-        model.load_state_dict(
-            torch.load(
-                "/Users/lpraat/develop/essentialmix/essentialmix/experiments/guided_diffusion/lsun_bedroom.pt",
-                map_location=DEVICE,
-            )
-        )
-        model.eval()
-        model = model.to('mps')
-        if model_config['use_fp16']:
-            model.convert_to_fp16()
-
-        batch_size = 1
-        with torch.no_grad():
-            for output in diffusion_process.denoise(batch_size=batch_size, use_ddim=True):
-                denoised_x = output['denoised_x']
-                timestep = output['timestep']
-                if timestep % 10 == 0:
-                    for i in range(batch_size):
-                        img = denoised_x[i]
-                        img = ((img + 1) * 127.5).clamp(0, 255).to(torch.uint8)
-                        img = img.permute(1, 2, 0)
-                        img = img.contiguous()
-                        out_img = img.to('cpu').numpy().reshape(256, 256, 3)
-                        print("saving image: ", out_img.shape)
-                        plt.imsave(f"./batch_{i}_{timestep}.png", out_img)
