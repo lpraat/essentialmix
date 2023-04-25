@@ -34,7 +34,7 @@ config = {
     },
 
     "weights_uris": {
-        "model": "/Users/lpraat/develop/essentialmix/essentialmix/experiments/guided_diffusion/lsun_bedroom.pt",
+        "model": "https://openaipublic.blob.core.windows.net/diffusion/jul-2021/lsun_bedroom.pt",
     }
 }
 

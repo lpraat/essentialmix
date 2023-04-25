@@ -33,8 +33,8 @@ config = {
         "image_size": 256,
     },
     "weights_uris": {
-        "model": "/Users/lpraat/develop/essentialmix/essentialmix/experiments/guided_diffusion/256x256_diffusion.pt",
-        "classifier": "/Users/lpraat/develop/essentialmix/essentialmix/experiments/guided_diffusion/256x256_classifier.pt",
+        "model": "https://openaipublic.blob.core.windows.net/diffusion/jul-2021/256x256_diffusion.pt",
+        "classifier": "https://openaipublic.blob.core.windows.net/diffusion/jul-2021/256x256_classifier.pt",
     }
 }
 

@@ -235,8 +235,11 @@ class GaussianDiffusion:
         else:
             x = torch.randn(size=(batch_size, self.model.in_channels, self.model.image_size, self.model.image_size))
 
+        assert batch_size == x_0.shape[0]
+
         if y is not None:
             assert y.shape[0] == x.shape[0]
+
         denoise_fn = self.ddim_denoise_at_t if use_ddim else self.ddpm_denoise_at_t
         for t in range(self.denoise_timesteps)[::-1]:
             t0 = time.perf_counter()
