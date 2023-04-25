@@ -85,7 +85,10 @@ def generate(
         images = []
         with torch.no_grad():
             for batch_iter, batch_size in enumerate(batch_sizes):
-                print(f"Generating (iter={batch_iter+1}/{len(batch_sizes)}, n_samples={batch_size})")
+                print(
+                    f"Generated {sum(batch_sizes[:batch_iter])}/{sum(batch_sizes[batch_iter:])} images. "
+                    f"Current iter={batch_iter + 1}/{len(batch_sizes)}"
+                )
                 for output in diffusion_process.denoise(batch_size=batch_size, use_ddim=use_ddim, y=torch.tensor([cls] * batch_size, dtype=torch.int32)):
                     denoised_x = output['denoised_x']
                     timestep = output['timestep']
