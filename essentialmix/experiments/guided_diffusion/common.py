@@ -1,3 +1,5 @@
+import os
+import subprocess
 from collections import ChainMap
 from typing import Literal
 
@@ -11,7 +13,13 @@ from essentialmix.models.externals.guided_diffusion import (
 
 
 def prepare_model(model: nn.Module, weights_uri: str, device: Literal['mps', 'cuda'], use_fp16: bool) -> nn.Module:
-    model.load_state_dict(torch.load(weights_uri, map_location=device))
+    file_name = weights_uri.split("/")[-1]
+    target_directory = os.path.join(os.path.dirname(__file__), "../../..", "weights", "guided_diffusion")
+    os.makedirs(target_directory, exist_ok=True)
+    target_file = os.path.join(target_directory, file_name)
+    if not os.path.isfile(target_file):
+        subprocess.run(["wget", weights_uri, "-O", target_file], check=True)
+    model.load_state_dict(torch.load(target_file, map_location=device))
     model.to(device)
     if use_fp16:
         model.convert_to_fp16()
@@ -56,14 +64,3 @@ def prepare_img_tensor_for_plot(img: torch.Tensor) -> np.ndarray:
         ((img + 1) * 127.5).clamp(0, 255).to(torch.uint8).permute(1, 2, 0).contiguous()
         .cpu().numpy().reshape(h, w, ch)
     )
-
-
-
-
-
-
-
-
-
-
-
