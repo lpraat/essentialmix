@@ -465,11 +465,11 @@ class AttentionPool2d(nn.Module):
         spacial_dim: int,
         embed_dim: int,
         num_heads_channels: int,
-        output_dim: int = None,
+        output_dim: int | None = None,
     ):
         super().__init__()
         self.positional_embedding = nn.Parameter(
-            th.randn(embed_dim, spacial_dim ** 2 + 1) / embed_dim ** 0.5
+            th.randn(embed_dim, spacial_dim**2 + 1) / embed_dim**0.5
         )
         self.qkv_proj = conv_nd(1, embed_dim, 3 * embed_dim, 1)
         self.c_proj = conv_nd(1, embed_dim, output_dim or embed_dim, 1)
@@ -1108,10 +1108,13 @@ def classifier_defaults():
     )
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     from essentialmix.core.utils import get_number_of_parameters
+
     model = create_model(**noise_model_defaults())
     print(f"Model number of parameters: {get_number_of_parameters(model) * 1e-6:.2f}M")
 
     classifier = create_classifier(**classifier_defaults())
-    print(f"Classifier number of parameters: {get_number_of_parameters(classifier) * 1e-6:.2f}M")
+    print(
+        f"Classifier number of parameters: {get_number_of_parameters(classifier) * 1e-6:.2f}M"
+    )

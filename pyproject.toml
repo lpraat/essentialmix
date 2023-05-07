@@ -1,0 +1,42 @@
+[project]
+name = "essentialmix"
+authors = [
+    {name = "Lorenzo Pratissoli", email = "lorenzo.pratissoli@outlook.com"},
+]
+description = ""
+readme = "README.md"
+requires-python = ">=3.10"
+license = {file = "LICENSE"}
+dynamic = ["version"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+]
+
+dependencies = [
+    "torch",
+    "numpy",
+    "click",
+    "matplotlib",
+    "seaborn",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pre-commit",
+    "pytest",
+    "black",
+    "mypy",
+]
+
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["essentialmix"]
+
+#[project.scripts]
+#cli-name = "mypkg.mymodule:some_func"
+
+[tool.mypy]
+ignore_missing_imports = true

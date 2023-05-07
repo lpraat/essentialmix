@@ -6,7 +6,9 @@ import numpy as np
 from mpl_toolkits.axes_grid1 import ImageGrid
 
 
-def image_grid(images: Sequence[np.ndarray], n_cols=5, figsize=(10, 10), axes_pad=0.1) -> plt.Figure:
+def image_grid(
+    images: Sequence[np.ndarray], n_cols=5, figsize=(10, 10), axes_pad=0.1
+) -> plt.Figure:
     n_cols = min(len(images), n_cols)
     n = len(images)
     n_rows = math.ceil(n / n_cols)

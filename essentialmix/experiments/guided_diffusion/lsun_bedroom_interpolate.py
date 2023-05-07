@@ -9,7 +9,10 @@ import torch
 
 from essentialmix.core.plot import image_grid
 from essentialmix.core.utils import slerp
-from essentialmix.experiments.guided_diffusion.common import build_diffusion_kwargs, prepare_img_tensor_for_plot
+from essentialmix.experiments.guided_diffusion.common import (
+    build_diffusion_kwargs,
+    prepare_img_tensor_for_plot,
+)
 from essentialmix.experiments.guided_diffusion.diffusion import GaussianDiffusion
 
 # class-unconditional lsun bedroom
@@ -25,30 +28,46 @@ config = {
         "use_fp16": True,
         "use_scale_shift_norm": True,
         "image_size": 256,
-        "learn_sigma": True
+        "learn_sigma": True,
     },
     "diffusion_process": {
         "num_diffusion_timesteps": 1000,
         "sigma_learned": True,
         "noise_schedule": "linear",
     },
-
     "weights_uris": {
         "model": "https://openaipublic.blob.core.windows.net/diffusion/jul-2021/lsun_bedroom.pt",
-    }
+    },
 }
 
 
 @click.command()
-@click.option('--n_interp_rows', help='Number of interpolated rows to generate', required=True, type=int)
-@click.option('--batch_size', help='Batch size', required=True, type=int)
-@click.option('--device', help='Torch device', default='cuda', type=click.Choice(['cuda', 'mps'], case_sensitive=False))
-@click.option('--output_folder', help='Folder to save the results to', default='.', type=str)
-@click.option('--denoise_steps', help='The number of steps in the reverse process', required=True, type=int)
+@click.option(
+    "--n_interp_rows",
+    help="Number of interpolated rows to generate",
+    required=True,
+    type=int,
+)
+@click.option("--batch_size", help="Batch size", required=True, type=int)
+@click.option(
+    "--device",
+    help="Torch device",
+    default="cuda",
+    type=click.Choice(["cuda", "mps"], case_sensitive=False),
+)
+@click.option(
+    "--output_folder", help="Folder to save the results to", default=".", type=str
+)
+@click.option(
+    "--denoise_steps",
+    help="The number of steps in the reverse process",
+    required=True,
+    type=int,
+)
 def generate(
     n_interp_rows: int,
     batch_size: int,
-    device: Literal['mps', 'cuda'],
+    device: Literal["mps", "cuda"],
     output_folder: str,
     denoise_steps: int,
 ) -> None:
@@ -60,14 +79,14 @@ def generate(
             **diffusion_kwargs,
         )
 
-        noise_starts = deque()
+        noise_starts: deque[torch.Tensor] = deque()
         alphas = torch.linspace(1, 0, 6)
 
         for _ in range(n_interp_rows):
             a = torch.randn(3, 256, 256)
             b = torch.randn(3, 256, 256)
             for alpha in alphas:
-                noise_starts.append(slerp(alpha, a, b).view(*a.shape))
+                noise_starts.append(slerp(alpha.item(), a, b).view(*a.shape))
 
         batch_size = batch_size
         full = len(noise_starts) // batch_size
@@ -79,7 +98,7 @@ def generate(
         with torch.no_grad():
             for batch_iter, batch_size in enumerate(batch_sizes):
                 print(
-                    f"Generated {sum(batch_sizes[:batch_iter])}/{sum(batch_sizes[batch_iter:])} images. "
+                    f"Generated {sum(batch_sizes[:batch_iter])}/{sum(batch_sizes)} images. "
                     f"Current iter={batch_iter+1}/{len(batch_sizes)}"
                 )
                 x_0 = []
@@ -87,19 +106,21 @@ def generate(
                     x_0.append(noise_starts.popleft())
                 x_0 = torch.stack(x_0)
 
-                for output in diffusion_process.denoise(x_0=x_0, batch_size=batch_size, use_ddim=True):
-                    denoised_x = output['denoised_x']
+                for output in diffusion_process.denoise(
+                    x_0=x_0, batch_size=batch_size, use_ddim=True
+                ):
+                    denoised_x = output["denoised_x"]
 
                 for i in range(batch_size):
                     images.append(prepare_img_tensor_for_plot(denoised_x[i]))
 
         fig = image_grid(images, n_cols=len(alphas))
-        grid_path = os.path.join(output_folder, f"lsun_bedroom_interp_grid.png")
+        grid_path = os.path.join(output_folder, "lsun_bedroom_interp_grid.png")
         print(f"Saving interp grid {grid_path}")
         fig.savefig(grid_path)
         plt.clf()
         print(f"Done! Took {time.perf_counter() - t0:.2f} s")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     generate()
