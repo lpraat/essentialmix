@@ -1,12 +1,11 @@
 import math
 import time
+from typing import Generator
 
 import torch
 import torch.nn.functional as F
 
-from typing import Generator
-
-from essentialmix.models.externals.guided_diffusion import UNetModel, EncoderUNetModel
+from essentialmix.models.externals.guided_diffusion import EncoderUNetModel, UNetModel
 
 
 def linear_betas(

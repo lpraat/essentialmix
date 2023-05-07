@@ -1,12 +1,11 @@
 # https://github.com/openai/guided-diffusion.git
 import math
+from abc import abstractmethod
 
 import torch
-import torch.nn as nn
 import torch as th
+import torch.nn as nn
 import torch.nn.functional as F
-
-from abc import abstractmethod
 
 NUM_CLASSES = 1000  # imagenet
 

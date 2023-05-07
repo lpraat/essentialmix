@@ -3,15 +3,15 @@ import subprocess
 from collections import ChainMap
 from typing import Literal
 
+import numpy as np
 import torch
 import torch.nn as nn
-import numpy as np
 
 from essentialmix.models.externals.guided_diffusion import (
+    classifier_defaults,
+    create_classifier,
     create_model,
     noise_model_defaults,
-    create_classifier,
-    classifier_defaults,
 )
 
 

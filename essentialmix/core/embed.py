@@ -1,5 +1,6 @@
-import torch
 import math
+
+import torch
 
 
 def positional_encoding(timesteps: torch.Tensor, embed_dim: int) -> torch.Tensor:
@@ -16,8 +17,8 @@ def positional_encoding(timesteps: torch.Tensor, embed_dim: int) -> torch.Tensor
 
 
 if __name__ == "__main__":
-    import seaborn as sns
     import matplotlib.pyplot as plt
+    import seaborn as sns
 
     timesteps = torch.arange(100)
     encodings = positional_encoding(timesteps, 512)
