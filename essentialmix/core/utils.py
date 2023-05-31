@@ -7,7 +7,7 @@ import torch.nn as nn
 
 def get_number_of_parameters(model: nn.Module) -> int:
     n_params = 0
-    for name, parameter in model.named_parameters():
+    for parameter in model.parameters():
         n_params += reduce(mul, parameter.shape, 1)
     return n_params
 
@@ -15,7 +15,9 @@ def get_number_of_parameters(model: nn.Module) -> int:
 def slerp_batched(
     alpha: float, point_a: torch.Tensor, point_b: torch.Tensor
 ) -> torch.Tensor:
-    """Batched spherical linear interpolation"""
+    """
+    Batched spherical linear interpolation
+    """
     assert point_a.shape == point_b.shape
     batch_size = point_a.shape[0]
     point_a_vec = point_a.view(batch_size, -1)
@@ -31,5 +33,7 @@ def slerp_batched(
 
 
 def slerp(alpha: float, point_a: torch.Tensor, point_b: torch.Tensor) -> torch.Tensor:
-    """Spherical linear interpolation (SLERP)"""
+    """
+    Spherical linear interpolation
+    """
     return slerp_batched(alpha, point_a.unsqueeze(dim=0), point_b.unsqueeze(dim=0))

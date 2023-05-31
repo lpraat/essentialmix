@@ -1,3 +1,0 @@
-#!/usr/bin/env bash
-pip install -e ".[dev]" --quiet
-mypy --ignore-missing-imports --scripts-are-modules essentialmix

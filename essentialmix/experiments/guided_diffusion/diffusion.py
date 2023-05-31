@@ -1,11 +1,11 @@
 import math
 import time
-from typing import Generator
+from typing import Iterator
 
 import torch
 import torch.nn.functional as F
 
-from essentialmix.models.externals.guided_diffusion import EncoderUNetModel, UNetModel
+from essentialmix.experiments.guided_diffusion.model import EncoderUNetModel, UNetModel
 
 
 def linear_betas(
@@ -17,7 +17,7 @@ def linear_betas(
 def cosine_betas(
     num_diffusion_timesteps: int, s: float = 0.008, max_beta: float = 0.999
 ) -> torch.Tensor:
-    def alpha_bar(t):
+    def alpha_bar(t: float) -> float:
         return math.cos((t + s) / (1 + s) * math.pi / 2) ** 2
 
     betas = []
@@ -52,6 +52,7 @@ class GaussianDiffusion:
             else cosine_betas(num_diffusion_timesteps)
         )
 
+        self.steps: None | torch.Tensor = None
         if self.timestep_respacing is not None:
             # https://arxiv.org/pdf/2102.09672.pdf Section 4
             self.steps = torch.linspace(
@@ -64,13 +65,12 @@ class GaussianDiffusion:
             new_alpha_bar_prev = torch.cat([torch.tensor([1.0]), new_alpha_bar[:-1]])
             new_betas = 1 - new_alpha_bar / new_alpha_bar_prev
             self.betas = new_betas
-        else:
-            self.steps = None
 
-        # The number of denoising steps (can be < num_diffusion_steps if we use timestep_respacing)
+        # The number of denoising steps
+        # (can be < num_diffusion_steps if we use timestep_respacing)
         self.denoise_timesteps = self.betas.shape[0]
 
-        def _check_shape(tensor):
+        def _check_shape(tensor: torch.Tensor) -> None:
             assert tensor.shape == (self.denoise_timesteps,)
 
         self.alpha_t = 1 - self.betas
@@ -114,10 +114,10 @@ class GaussianDiffusion:
 
         self.sigma_learned = sigma_learned
 
-    def q_sample(self, x_0: torch.Tensor, t: int):
+    def q_sample(self, x_0: torch.Tensor, t: int) -> torch.Tensor:
         """Forward process q(x_t | x_0)"""
-        t = torch.tensor([t] * x_0.shape[0])
-        alpha_bar = self.index_and_broadcast(self.alpha_bar, t)
+        t_tensor = torch.tensor([t] * x_0.shape[0])
+        alpha_bar = self.index_and_broadcast(self.alpha_bar, t_tensor)
         x_t = torch.sqrt(alpha_bar) * x_0
         x_t += torch.sqrt(1 - alpha_bar) * torch.randn_like(x_0)
         return x_t
@@ -136,7 +136,9 @@ class GaussianDiffusion:
     ) -> torch.Tensor:
         return tensor[t].view([t.shape[0], 1, 1, 1])
 
-    def class_gradient_guide(self, x, t, y):
+    def class_gradient_guide(
+        self, x: torch.Tensor, t: torch.Tensor, y: torch.Tensor
+    ) -> torch.Tensor:
         """
         grad(pϕ(y | x_t))
         """
@@ -166,55 +168,67 @@ class GaussianDiffusion:
         """
         # Assumption: t is equal for all the samples in the batch x_t
         if t == 0:
-            z = 0  # No noise at the last timestep
+            z = torch.tensor([0.0])  # No noise at the last timestep
         else:
             z = torch.randn_like(x_t)
 
-        t = torch.tensor([t] * x_t.shape[0])
+        t_tensor = torch.tensor([t] * x_t.shape[0])
         if self.sigma_learned:
             num_channels = x_t.shape[1]
-            model_output = self.call_model(x_t, t, y)
+            model_output = self.call_model(x_t, t_tensor, y)
             assert model_output.shape[1] == num_channels * 2
             model_noise, v = torch.split(
                 model_output, model_output.shape[1] // 2, dim=1
             )
 
             v = (v + 1) / 2  # v is between [-1, 1]
-            log_variance = v * torch.log(self.index_and_broadcast(self.betas, t)) + (
-                1 - v
-            ) * self.index_and_broadcast(self.log_posterior_variance, t)
+            log_variance = v * torch.log(
+                self.index_and_broadcast(self.betas, t_tensor)
+            ) + (1 - v) * self.index_and_broadcast(
+                self.log_posterior_variance, t_tensor
+            )
 
             # Posterior mean
             if pred_x_0:
                 # From x_0
                 x_0 = (
-                    self.index_and_broadcast(self.sqrt_recip_alphas_cumprod, t) * x_t
-                    - self.index_and_broadcast(self.sqrt_recipm1_alphas_cumprod, t)
+                    self.index_and_broadcast(self.sqrt_recip_alphas_cumprod, t_tensor)
+                    * x_t
+                    - self.index_and_broadcast(
+                        self.sqrt_recipm1_alphas_cumprod, t_tensor
+                    )
                     * model_noise
                 )
                 x_0.clamp_(-1.0, 1.0)
 
                 x_prev = (
-                    self.index_and_broadcast(self.posterior_mean_coef1, t) * x_0
-                    + self.index_and_broadcast(self.posterior_mean_coef2, t) * x_t
+                    self.index_and_broadcast(self.posterior_mean_coef1, t_tensor) * x_0
+                    + self.index_and_broadcast(self.posterior_mean_coef2, t_tensor)
+                    * x_t
                 )
             else:
                 # Direct formula
-                alpha_t = self.index_and_broadcast(self.alpha_t, t)
+                alpha_t = self.index_and_broadcast(self.alpha_t, t_tensor)
                 x_prev = (1 / torch.sqrt(alpha_t)) * (
                     x_t
                     - (
                         (1 - alpha_t)
-                        / torch.sqrt(1 - self.index_and_broadcast(self.alpha_bar, t))
+                        / torch.sqrt(
+                            1 - self.index_and_broadcast(self.alpha_bar, t_tensor)
+                        )
                     )
                     * model_noise
                 )
 
             if y is not None:
                 # Class guidance
-                # This is probably wrong: x_prev.add_(self.class_gradient_guide(x_t, t, y) * torch.exp(log_variance))
+                # This is probably wrong:
+                # x_prev.add_(
+                #   self.class_gradient_guide(x_t, t, y) * torch.exp(log_variance)
+                # )
+                # And this is the correct one:
                 x_prev.add_(
-                    self.class_gradient_guide(x_prev, t - 1, y)
+                    self.class_gradient_guide(x_prev, t_tensor - 1, y)
                     * torch.exp(log_variance)
                 )
 
@@ -231,14 +245,14 @@ class GaussianDiffusion:
         """
         # Assumption: t is equal for all the samples in the batch x_t
         if t == 0:
-            z = 0  # No noise at the last timestep
+            z = torch.tensor([0.0])  # No noise at the last timestep
         else:
             z = torch.randn_like(x_t)
 
-        t = torch.tensor([t] * x_t.shape[0])
+        t_tensor = torch.tensor([t] * x_t.shape[0])
         if self.sigma_learned:
             num_channels = x_t.shape[1]
-            model_output = self.call_model(x_t, t, y)
+            model_output = self.call_model(x_t, t_tensor, y)
             model_noise, _ = torch.split(
                 model_output, model_output.shape[1] // 2, dim=1
             )
@@ -247,20 +261,20 @@ class GaussianDiffusion:
             if y is not None:
                 # Class guidance
                 model_noise.add_(
-                    -torch.sqrt(1 - self.index_and_broadcast(self.alpha_bar, t))
-                    * self.class_gradient_guide(x_t, t, y)
+                    -torch.sqrt(1 - self.index_and_broadcast(self.alpha_bar, t_tensor))
+                    * self.class_gradient_guide(x_t, t_tensor, y)
                 )
 
             x_0 = (
-                self.index_and_broadcast(self.sqrt_recip_alphas_cumprod, t) * x_t
-                - self.index_and_broadcast(self.sqrt_recipm1_alphas_cumprod, t)
+                self.index_and_broadcast(self.sqrt_recip_alphas_cumprod, t_tensor) * x_t
+                - self.index_and_broadcast(self.sqrt_recipm1_alphas_cumprod, t_tensor)
                 * model_noise
             )
             x_0.clamp_(-1.0, 1.0)
 
             # Eta interpolates between DDIM (eta=0) and DDPM (eta=1)
-            alpha_bar = self.index_and_broadcast(self.alpha_bar, t)
-            alpha_bar_prev = self.index_and_broadcast(self.alpha_bar_prev, t)
+            alpha_bar = self.index_and_broadcast(self.alpha_bar, t_tensor)
+            alpha_bar_prev = self.index_and_broadcast(self.alpha_bar_prev, t_tensor)
             sigma = (
                 eta
                 * torch.sqrt((1 - alpha_bar_prev) / (1 - alpha_bar))
@@ -281,8 +295,8 @@ class GaussianDiffusion:
         x_0: torch.Tensor | None = None,
         batch_size: int = 1,
         y: torch.Tensor | None = None,
-        use_ddim=False,
-    ) -> Generator:
+        use_ddim: bool = False,
+    ) -> Iterator[dict]:
         if x_0 is not None:
             x = x_0
         else:
@@ -305,7 +319,8 @@ class GaussianDiffusion:
             t0 = time.perf_counter()
             x = denoise_fn(x, t, y)
             print(
-                f"Completed {'DDIM' if use_ddim else 'DDPM'} denoise at step: {t}. Took {time.perf_counter() - t0:.2f} s"
+                f"Completed {'DDIM' if use_ddim else 'DDPM'} denoise at step: {t}. "
+                f"Took {time.perf_counter() - t0:.2f} s"
             )
             yield {
                 "timestep": t,

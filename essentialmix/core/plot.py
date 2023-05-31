@@ -1,14 +1,18 @@
 import math
 from typing import Sequence
 
+import matplotlib.figure
 import matplotlib.pyplot as plt
 import numpy as np
 from mpl_toolkits.axes_grid1 import ImageGrid
 
 
 def image_grid(
-    images: Sequence[np.ndarray], n_cols=5, figsize=(10, 10), axes_pad=0.1
-) -> plt.Figure:
+    images: Sequence[np.ndarray],
+    n_cols: int = 5,
+    figsize: tuple[int, int] = (10, 10),
+    axes_pad: float = 0.1,
+) -> matplotlib.figure.Figure:
     n_cols = min(len(images), n_cols)
     n = len(images)
     n_rows = math.ceil(n / n_cols)

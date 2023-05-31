@@ -101,10 +101,7 @@ def generate(
                     f"Generated {sum(batch_sizes[:batch_iter])}/{sum(batch_sizes)} images. "
                     f"Current iter={batch_iter+1}/{len(batch_sizes)}"
                 )
-                x_0 = []
-                for _ in range(batch_size):
-                    x_0.append(noise_starts.popleft())
-                x_0 = torch.stack(x_0)
+                x_0 = torch.stack([noise_starts.popleft() for _ in range(batch_size)])
 
                 for output in diffusion_process.denoise(
                     x_0=x_0, batch_size=batch_size, use_ddim=True

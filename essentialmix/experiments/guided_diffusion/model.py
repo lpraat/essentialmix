@@ -1,3 +1,5 @@
+# mypy: ignore-errors
+
 # https://github.com/openai/guided-diffusion.git
 import math
 from abc import abstractmethod

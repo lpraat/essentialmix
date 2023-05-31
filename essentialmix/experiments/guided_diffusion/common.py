@@ -5,9 +5,10 @@ from typing import Literal
 
 import numpy as np
 import torch
-import torch.nn as nn
 
-from essentialmix.models.externals.guided_diffusion import (
+from essentialmix.experiments.guided_diffusion.model import (
+    EncoderUNetModel,
+    UNetModel,
     classifier_defaults,
     create_classifier,
     create_model,
@@ -16,8 +17,11 @@ from essentialmix.models.externals.guided_diffusion import (
 
 
 def prepare_model(
-    model: nn.Module, weights_uri: str, device: Literal["mps", "cuda"], use_fp16: bool
-) -> nn.Module:
+    model: UNetModel | EncoderUNetModel,
+    weights_uri: str,
+    device: Literal["mps", "cuda"],
+    use_fp16: bool,
+) -> UNetModel | EncoderUNetModel:
     file_name = weights_uri.split("/")[-1]
     target_directory = os.path.join(
         os.path.dirname(__file__), "../../..", "weights", "guided_diffusion"
