@@ -13,20 +13,21 @@ classifiers = [
 ]
 
 dependencies = [
-    "torch",
-    "numpy",
     "click",
-    "matplotlib",
-    "seaborn",
     "einops",
+    "matplotlib",
+    "numpy",
+    "tiktoken",
+    "torch",
+    "transformers",
 ]
 
 [project.optional-dependencies]
 dev = [
-    "pre-commit",
-    "pytest",
     "black",
     "mypy",
+    "pre-commit",
+    "pytest",
     "ruff",
 ]
 
