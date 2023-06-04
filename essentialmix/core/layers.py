@@ -2,6 +2,7 @@ from typing import Optional
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from einops import einsum, rearrange
 
 
@@ -19,12 +20,14 @@ class MultiHeadAttention(nn.Module):
         n_heads: int,
         emb_dim: int,
         bias: bool = False,
+        use_flash_attention: bool = True,
     ) -> None:
         super().__init__()
         assert emb_dim % n_heads == 0, "Embedding dimension must be divisible by the number of heads"
         self.n_heads = n_heads
         self.d = emb_dim // self.n_heads
         self.emb_dim = emb_dim
+        self.use_flash_attention = use_flash_attention
         self.register_buffer("scale", torch.sqrt(torch.tensor([self.d])))
         self.proj_q = nn.Linear(emb_dim, self.n_heads * self.d, bias=bias)
         self.proj_k = nn.Linear(emb_dim, self.n_heads * self.d, bias=bias)
@@ -44,27 +47,30 @@ class MultiHeadAttention(nn.Module):
         key = rearrange(self.proj_k(k), rearrange_pattern, heads=self.n_heads)
         value = rearrange(self.proj_v(v), rearrange_pattern, heads=self.n_heads)
 
-        attn = (
-            einsum(
-                query,
-                key,
-                "batch heads time1 dim, batch heads time2 dim -> batch heads time1 time2",
+        if self.use_flash_attention:
+            attn = F.scaled_dot_product_attention(query, key, value, is_causal=True)
+        else:
+            attn = (
+                einsum(
+                    query,
+                    key,
+                    "batch heads time1 dim, batch heads time2 dim -> batch heads time1 time2",
+                )
+                / self.scale
             )
-            / self.scale
-        )
 
-        if mask is not None:
-            assert mask.shape[-1] == mask.shape[-2] == q.shape[1]
-            # (batch, heads, time, time)
-            mask = mask.expand(query.shape[0], self.n_heads, mask.shape[-1], mask.shape[-1])
-            attn.masked_fill_(mask == 0, float("-inf"))
+            if mask is not None:
+                assert mask.shape[-1] == mask.shape[-2] == q.shape[1]
+                # (batch, heads, time, time)
+                mask = mask.expand(query.shape[0], self.n_heads, mask.shape[-1], mask.shape[-1])
+                attn.masked_fill_(mask == 0, float("-inf"))
 
-        attn = attn.softmax(dim=-1)
-        attn = einsum(
-            attn,
-            value,
-            "batch heads time1 time2, batch heads time2 dim -> batch heads time1 dim",
-        )
+            attn = attn.softmax(dim=-1)
+            attn = einsum(
+                attn,
+                value,
+                "batch heads time1 time2, batch heads time2 dim -> batch heads time1 dim",
+            )
         return self.proj_o(
             rearrange(
                 attn,
