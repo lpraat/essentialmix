@@ -14,3 +14,6 @@ __pycache__
 
 # MacOs
 .DS_Store
+
+# Weights
+weights/**/*.pt
