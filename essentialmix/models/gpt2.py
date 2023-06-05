@@ -13,6 +13,7 @@ import transformers
 from einops import einsum, rearrange
 
 from essentialmix.core.layers import left_to_right_attention_mask
+from essentialmix.core.llm import LanguageModel, LanguageModelOutput
 from essentialmix.core.log import Logger
 
 logger = Logger.from_name(__name__)
@@ -120,7 +121,7 @@ class TransfomerBlock(nn.Module):
         return x + self.ff(self.lnorm2(x))
 
 
-class GPT(nn.Module):
+class GPT2(nn.Module):
     def __init__(
         self,
         ctx_len: int,
@@ -179,7 +180,7 @@ class GPT(nn.Module):
 
     @classmethod
     @torch.no_grad()
-    def from_pretrained(cls, name: str) -> "GPT":
+    def from_pretrained(cls, name: str) -> "GPT2":
         # https://github.com/huggingface/transformers/blob/main/src/transformers/models/gpt2/modeling_gpt2.py
         base_config = {"ctx_len": 1024, "vocab_size": 50257, "bias": True}
         model_config = {
@@ -223,3 +224,20 @@ class GPT(nn.Module):
         model.head.weight.copy_(weights["lm_head.weight"])
         assert id(model.head.weight) == id(model.token_embed.weight)  # weight tying
         return model
+
+
+class GPT2LanguageModel(LanguageModel):
+    def __init__(self, model: GPT2) -> None:
+        super().__init__()
+        self.model: GPT2 = model
+
+    @classmethod
+    def from_pretrained(cls, name: str) -> "GPT2LanguageModel":
+        return cls(GPT2.from_pretrained(name))
+
+    @property
+    def ctx_len(self) -> int:
+        return self.model.ctx_len
+
+    def __call__(self, token_indices: torch.Tensor, logits_indices: torch.Tensor) -> LanguageModelOutput:
+        return LanguageModelOutput(logits=self.model(token_indices, logits_indices))
