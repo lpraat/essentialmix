@@ -18,9 +18,8 @@ def positional_encoding(timesteps: torch.Tensor, embed_dim: int) -> torch.Tensor
 
 if __name__ == "__main__":
     import matplotlib.pyplot as plt
-    import seaborn as sns
 
-    timesteps = torch.arange(100)
-    encodings = positional_encoding(timesteps, 512)
-    sns.heatmap(encodings)
+    timesteps = torch.arange(32)
+    encodings = positional_encoding(timesteps, 32)
+    plt.imshow(encodings)
     plt.show()

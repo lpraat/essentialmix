@@ -11,6 +11,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import transformers
 from einops import einsum, rearrange
+from typing_extensions import Self
 
 from essentialmix.core.layers import left_to_right_attention_mask
 from essentialmix.core.llm import LanguageModel, LanguageModelOutput
@@ -172,7 +173,7 @@ class GPT2(nn.Module):
             x = block(x)
         x = self.l_norm(x)
         if logits_indices is not None:
-            # Only compute a subset of logits for a sequence subset
+            # Only compute logits for a sequence subset
             logits = self.head(x[torch.arange(x.shape[0]), logits_indices, :])
         else:
             logits = self.head(x)
@@ -180,7 +181,7 @@ class GPT2(nn.Module):
 
     @classmethod
     @torch.no_grad()
-    def from_pretrained(cls, name: str) -> "GPT2":
+    def from_pretrained(cls, name: str) -> Self:
         # https://github.com/huggingface/transformers/blob/main/src/transformers/models/gpt2/modeling_gpt2.py
         base_config = {"ctx_len": 1024, "vocab_size": 50257, "bias": True}
         model_config = {
@@ -232,7 +233,7 @@ class GPT2LanguageModel(LanguageModel):
         self.model: GPT2 = model
 
     @classmethod
-    def from_pretrained(cls, name: str) -> "GPT2LanguageModel":
+    def from_pretrained(cls, name: str) -> Self:
         return cls(GPT2.from_pretrained(name))
 
     @property

@@ -20,6 +20,8 @@ dependencies = [
     "tiktoken",
     "torch",
     "transformers",
+    "uvloop",
+    "websockets",
 ]
 
 [project.optional-dependencies]

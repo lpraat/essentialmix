@@ -1,6 +1,8 @@
 import logging
 from typing import Any
 
+from typing_extensions import Self
+
 
 class Logger:
     def __init__(self, name: str) -> None:
@@ -14,7 +16,7 @@ class Logger:
         self.logger.addHandler(handler)
 
     @classmethod
-    def from_name(cls, name: str) -> "Logger":
+    def from_name(cls, name: str) -> Self:
         return cls(name)
 
     def __getattr__(self, attr: str) -> Any:
