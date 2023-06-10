@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 import torch
 
 from essentialmix.core.plot import image_grid
-from essentialmix.core.utils import slerp
+from essentialmix.core.torch_utils import slerp
 from essentialmix.experiments.guided_diffusion.common import (
     build_diffusion_kwargs,
     prepare_img_tensor_for_plot,
@@ -55,9 +55,7 @@ config = {
     default="cuda",
     type=click.Choice(["cuda", "mps"], case_sensitive=False),
 )
-@click.option(
-    "--output_folder", help="Folder to save the results to", default=".", type=str
-)
+@click.option("--output_folder", help="Folder to save the results to", default=".", type=str)
 @click.option(
     "--denoise_steps",
     help="The number of steps in the reverse process",
@@ -103,9 +101,7 @@ def generate(
                 )
                 x_0 = torch.stack([noise_starts.popleft() for _ in range(batch_size)])
 
-                for output in diffusion_process.denoise(
-                    x_0=x_0, batch_size=batch_size, use_ddim=True
-                ):
+                for output in diffusion_process.denoise(x_0=x_0, batch_size=batch_size, use_ddim=True):
                     denoised_x = output["denoised_x"]
 
                 for i in range(batch_size):
