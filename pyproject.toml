@@ -13,6 +13,8 @@ classifiers = [
 ]
 
 dependencies = [
+    "aiohttp",
+    "cattrs",
     "click",
     "einops",
     "matplotlib",
