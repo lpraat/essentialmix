@@ -3,13 +3,13 @@ from types import TracebackType
 from typing import ClassVar, Optional, Type
 
 import click
-import websockets
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.prompt import Prompt
 from rich.status import Status
 from typing_extensions import Self
+from websockets.client import WebSocketClientProtocol, connect
 
 from essentialmix.cli.chat.common import Message
 from essentialmix.core.log import Logger
@@ -30,7 +30,7 @@ class ChatClient:
         self.console = Console()
 
     async def __aenter__(self) -> Self:
-        self.websocket = websockets.WebSocketClientProtocol = await websockets.connect(self.uri)
+        self.websocket: WebSocketClientProtocol = await connect(self.uri)
         logger.info(f"Connected to remote server with address={self.websocket.remote_address}")
         return self
 
@@ -63,7 +63,8 @@ class ChatClient:
 
     async def recv_message(self) -> Message:
         msg_recv = await self.websocket.recv()
-        return Message.deserialize(msg_recv)
+        str_msg = msg_recv.decode() if isinstance(msg_recv, bytes) else msg_recv  # typeguard
+        return Message.deserialize(str_msg)
 
     async def run(self) -> None:
         while True:
