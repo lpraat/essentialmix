@@ -4,6 +4,7 @@ from essentialmix.core.log import Logger
 
 
 def register_n_loggers(n: int) -> None:
+    Logger.instances = []  # reset instances
     logger_names = [f"logger_{i}" for i in range(n)]
     for name in logger_names:
         Logger.from_name(name)
