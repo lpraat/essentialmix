@@ -1,6 +1,6 @@
 import math
 import time
-from typing import Iterator
+from typing import Iterator, Optional
 
 import torch
 import torch.nn.functional as F
@@ -8,15 +8,11 @@ import torch.nn.functional as F
 from essentialmix.experiments.guided_diffusion.model import EncoderUNetModel, UNetModel
 
 
-def linear_betas(
-    num_diffusion_timesteps: int, beta_start: float = 0.0001, beta_end: float = 0.02
-) -> torch.Tensor:
+def linear_betas(num_diffusion_timesteps: int, beta_start: float = 0.0001, beta_end: float = 0.02) -> torch.Tensor:
     return torch.linspace(beta_start, beta_end, num_diffusion_timesteps)
 
 
-def cosine_betas(
-    num_diffusion_timesteps: int, s: float = 0.008, max_beta: float = 0.999
-) -> torch.Tensor:
+def cosine_betas(num_diffusion_timesteps: int, s: float = 0.008, max_beta: float = 0.999) -> torch.Tensor:
     def alpha_bar(t: float) -> float:
         return math.cos((t + s) / (1 + s) * math.pi / 2) ** 2
 
@@ -75,9 +71,8 @@ class GaussianDiffusion:
 
         self.alpha_t = 1 - self.betas
         self.alpha_bar = torch.cumprod(self.alpha_t, dim=0)
-        self.alpha_bar_prev = torch.cat(
-            [torch.tensor([1.0]), self.alpha_bar[:-1]], dim=0
-        )
+        self.alpha_bar_prev = torch.cat([torch.tensor([1.0]), self.alpha_bar[:-1]], dim=0)
+        self.alpha_bar_next = torch.cat([self.alpha_bar[1:], torch.tensor([0.0])], dim=0)
         _check_shape(self.alpha_t)
         _check_shape(self.alpha_bar)
         _check_shape(self.alpha_bar_prev)
@@ -87,9 +82,7 @@ class GaussianDiffusion:
         _check_shape(self.sqrt_recip_alphas_cumprod)
         _check_shape(self.sqrt_recipm1_alphas_cumprod)
 
-        self.posterior_variance = (
-            (1 - self.alpha_bar_prev) / (1 - self.alpha_bar)
-        ) * self.betas
+        self.posterior_variance = ((1 - self.alpha_bar_prev) / (1 - self.alpha_bar)) * self.betas
         self.log_posterior_variance = torch.log(
             torch.cat(
                 [
@@ -99,14 +92,8 @@ class GaussianDiffusion:
                 dim=0,
             )
         )
-        self.posterior_mean_coef1 = (
-            self.betas * torch.sqrt(self.alpha_bar_prev) / (1.0 - self.alpha_bar)
-        )
-        self.posterior_mean_coef2 = (
-            (1.0 - self.alpha_bar_prev)
-            * torch.sqrt(self.alpha_t)
-            / (1 - self.alpha_bar)
-        )
+        self.posterior_mean_coef1 = self.betas * torch.sqrt(self.alpha_bar_prev) / (1.0 - self.alpha_bar)
+        self.posterior_mean_coef2 = (1.0 - self.alpha_bar_prev) * torch.sqrt(self.alpha_t) / (1 - self.alpha_bar)
         _check_shape(self.posterior_variance)
         _check_shape(self.log_posterior_variance)
         _check_shape(self.posterior_mean_coef1)
@@ -122,39 +109,65 @@ class GaussianDiffusion:
         x_t += torch.sqrt(1 - alpha_bar) * torch.randn_like(x_0)
         return x_t
 
-    def call_model(
-        self, x_t: torch.Tensor, t: torch.Tensor, y: torch.Tensor | None
-    ) -> torch.Tensor:
+    def ddim_inverse(self, x_0: torch.Tensor, y: Optional[torch.Tensor] = None) -> torch.Tensor:
+        """
+        DDIM inversion
+        # https://cdn.openai.com/papers/dall-e-2.pdf Section 3 - Image Manipulations
+        # https://arxiv.org/abs/2105.05233 Appendix F
+        """
+        x_t = x_0
+        for i, t in enumerate(range(self.denoise_timesteps)):
+            t_tensor = torch.tensor([t] * x_t.shape[0])
+            alpha_bar_next = self.index_and_broadcast(self.alpha_bar_next, t_tensor)
+
+            if self.sigma_learned:
+                num_channels = x_t.shape[1]
+                model_output = self.call_model(x_t, t_tensor, y=y)
+                assert model_output.shape[1] == num_channels * 2
+                model_noise, _ = torch.split(model_output, model_output.shape[1] // 2, dim=1)
+            else:
+                raise NotImplementedError("Fixed sigma not implemented")
+
+            if y is not None:
+                # Class guidance
+                model_noise.add_(
+                    -torch.sqrt(1 - self.index_and_broadcast(self.alpha_bar, t_tensor))
+                    * self.class_gradient_guide(x_t, t_tensor, y)
+                )
+
+            x_0 = (
+                self.index_and_broadcast(self.sqrt_recip_alphas_cumprod, t_tensor) * x_t
+                - self.index_and_broadcast(self.sqrt_recipm1_alphas_cumprod, t_tensor) * model_noise
+            )
+            x_0.clamp_(-1.0, 1.0)
+
+            x_t = x_0 * torch.sqrt(alpha_bar_next) + torch.sqrt(1 - alpha_bar_next) * model_noise
+
+        return x_t
+
+    def call_model(self, x_t: torch.Tensor, t: torch.Tensor, y: torch.Tensor | None) -> torch.Tensor:
         assert x_t.shape[0] == t.shape[0]
         if self.steps is not None:
             # In case we use re-spacing, pick the correct corresponding t
             return self.model(x_t, self.steps[t], y)
         return self.model(x_t, t, y)
 
-    def index_and_broadcast(
-        self, tensor: torch.Tensor, t: torch.Tensor
-    ) -> torch.Tensor:
+    def index_and_broadcast(self, tensor: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
         return tensor[t].view([t.shape[0], 1, 1, 1])
 
-    def class_gradient_guide(
-        self, x: torch.Tensor, t: torch.Tensor, y: torch.Tensor
-    ) -> torch.Tensor:
+    def class_gradient_guide(self, x: torch.Tensor, t: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
         """
         grad(pϕ(y | x_t))
         """
         if self.classifier is None:
-            raise RuntimeError(
-                "Trying to use class gradient but the classifier model is not set"
-            )
+            raise RuntimeError("Trying to use class gradient but the classifier model is not set")
 
         with torch.enable_grad():
             x_in = x.detach().requires_grad_(True)
             logits = self.classifier(x_in, t)
             log_probs = F.log_softmax(logits, dim=-1)
             selected = log_probs[range(len(logits)), y.view(-1)]
-            return (
-                torch.autograd.grad(selected.sum(), x_in)[0] * self.class_guidance_scale
-            )
+            return torch.autograd.grad(selected.sum(), x_in)[0] * self.class_guidance_scale
 
     def ddpm_denoise_at_t(
         self,
@@ -177,47 +190,32 @@ class GaussianDiffusion:
             num_channels = x_t.shape[1]
             model_output = self.call_model(x_t, t_tensor, y)
             assert model_output.shape[1] == num_channels * 2
-            model_noise, v = torch.split(
-                model_output, model_output.shape[1] // 2, dim=1
-            )
+            model_noise, v = torch.split(model_output, model_output.shape[1] // 2, dim=1)
 
             v = (v + 1) / 2  # v is between [-1, 1]
-            log_variance = v * torch.log(
-                self.index_and_broadcast(self.betas, t_tensor)
-            ) + (1 - v) * self.index_and_broadcast(
-                self.log_posterior_variance, t_tensor
-            )
+            log_variance = v * torch.log(self.index_and_broadcast(self.betas, t_tensor)) + (
+                1 - v
+            ) * self.index_and_broadcast(self.log_posterior_variance, t_tensor)
 
             # Posterior mean
             if pred_x_0:
                 # From x_0
                 x_0 = (
-                    self.index_and_broadcast(self.sqrt_recip_alphas_cumprod, t_tensor)
-                    * x_t
-                    - self.index_and_broadcast(
-                        self.sqrt_recipm1_alphas_cumprod, t_tensor
-                    )
-                    * model_noise
+                    self.index_and_broadcast(self.sqrt_recip_alphas_cumprod, t_tensor) * x_t
+                    - self.index_and_broadcast(self.sqrt_recipm1_alphas_cumprod, t_tensor) * model_noise
                 )
                 x_0.clamp_(-1.0, 1.0)
 
                 x_prev = (
                     self.index_and_broadcast(self.posterior_mean_coef1, t_tensor) * x_0
-                    + self.index_and_broadcast(self.posterior_mean_coef2, t_tensor)
-                    * x_t
+                    + self.index_and_broadcast(self.posterior_mean_coef2, t_tensor) * x_t
                 )
             else:
                 # Direct formula
                 alpha_t = self.index_and_broadcast(self.alpha_t, t_tensor)
                 x_prev = (1 / torch.sqrt(alpha_t)) * (
                     x_t
-                    - (
-                        (1 - alpha_t)
-                        / torch.sqrt(
-                            1 - self.index_and_broadcast(self.alpha_bar, t_tensor)
-                        )
-                    )
-                    * model_noise
+                    - ((1 - alpha_t) / torch.sqrt(1 - self.index_and_broadcast(self.alpha_bar, t_tensor))) * model_noise
                 )
 
             if y is not None:
@@ -227,10 +225,7 @@ class GaussianDiffusion:
                 #   self.class_gradient_guide(x_t, t, y) * torch.exp(log_variance)
                 # )
                 # And this is the correct one:
-                x_prev.add_(
-                    self.class_gradient_guide(x_prev, t_tensor - 1, y)
-                    * torch.exp(log_variance)
-                )
+                x_prev.add_(self.class_gradient_guide(x_prev, t_tensor - 1, y) * torch.exp(log_variance))
 
             x_prev += torch.exp(0.5 * log_variance) * z
         else:
@@ -253,9 +248,7 @@ class GaussianDiffusion:
         if self.sigma_learned:
             num_channels = x_t.shape[1]
             model_output = self.call_model(x_t, t_tensor, y)
-            model_noise, _ = torch.split(
-                model_output, model_output.shape[1] // 2, dim=1
-            )
+            model_noise, _ = torch.split(model_output, model_output.shape[1] // 2, dim=1)
             assert model_noise.shape[1] == num_channels
 
             if y is not None:
@@ -267,8 +260,7 @@ class GaussianDiffusion:
 
             x_0 = (
                 self.index_and_broadcast(self.sqrt_recip_alphas_cumprod, t_tensor) * x_t
-                - self.index_and_broadcast(self.sqrt_recipm1_alphas_cumprod, t_tensor)
-                * model_noise
+                - self.index_and_broadcast(self.sqrt_recipm1_alphas_cumprod, t_tensor) * model_noise
             )
             x_0.clamp_(-1.0, 1.0)
 
@@ -276,15 +268,10 @@ class GaussianDiffusion:
             alpha_bar = self.index_and_broadcast(self.alpha_bar, t_tensor)
             alpha_bar_prev = self.index_and_broadcast(self.alpha_bar_prev, t_tensor)
             sigma = (
-                eta
-                * torch.sqrt((1 - alpha_bar_prev) / (1 - alpha_bar))
-                * torch.sqrt(1 - alpha_bar / alpha_bar_prev)
+                eta * torch.sqrt((1 - alpha_bar_prev) / (1 - alpha_bar)) * torch.sqrt(1 - alpha_bar / alpha_bar_prev)
             )
 
-            x_prev = (
-                torch.sqrt(alpha_bar_prev) * x_0
-                + torch.sqrt(1 - alpha_bar_prev - sigma**2) * model_noise
-            )
+            x_prev = torch.sqrt(alpha_bar_prev) * x_0 + torch.sqrt(1 - alpha_bar_prev - sigma**2) * model_noise
             x_prev += sigma * z
         else:
             raise NotImplementedError("Fixed sigma not implemented")
