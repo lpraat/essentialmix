@@ -1,7 +1,7 @@
 import os
 import subprocess
 from collections import ChainMap
-from typing import Literal
+from typing import Literal, Union
 
 import numpy as np
 import torch
@@ -17,15 +17,13 @@ from essentialmix.experiments.guided_diffusion.model import (
 
 
 def prepare_model(
-    model: UNetModel | EncoderUNetModel,
+    model: Union[UNetModel, EncoderUNetModel],
     weights_uri: str,
     device: Literal["mps", "cuda"],
     use_fp16: bool,
-) -> UNetModel | EncoderUNetModel:
+) -> Union[UNetModel, EncoderUNetModel]:
     file_name = weights_uri.split("/")[-1]
-    target_directory = os.path.join(
-        os.path.dirname(__file__), "../../..", "weights", "guided_diffusion"
-    )
+    target_directory = os.path.join(os.path.dirname(__file__), "../../..", "weights", "guided_diffusion")
     os.makedirs(target_directory, exist_ok=True)
     target_file = os.path.join(target_directory, file_name)
     if not os.path.isfile(target_file):
@@ -73,12 +71,5 @@ def build_diffusion_kwargs(config: dict, device: Literal["mps", "cuda"]) -> dict
 def prepare_img_tensor_for_plot(img: torch.Tensor) -> np.ndarray:
     ch, h, w = img.shape
     return (
-        ((img + 1) * 127.5)
-        .clamp(0, 255)
-        .to(torch.uint8)
-        .permute(1, 2, 0)
-        .contiguous()
-        .cpu()
-        .numpy()
-        .reshape(h, w, ch)
+        ((img + 1) * 127.5).clamp(0, 255).to(torch.uint8).permute(1, 2, 0).contiguous().cpu().numpy().reshape(h, w, ch)
     )

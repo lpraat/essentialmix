@@ -29,11 +29,11 @@ class GaussianDiffusion:
         self,
         model: UNetModel,
         num_diffusion_timesteps: int,
-        classifier: EncoderUNetModel | None = None,
+        classifier: Optional[EncoderUNetModel] = None,
         class_guidance_scale: float = 1.0,
         noise_schedule: str = "linear",
         sigma_learned: bool = False,
-        timestep_respacing: int | None = None,
+        timestep_respacing: Optional[int] = None,
     ):
         self.model = model
         self.classifier = classifier
@@ -48,7 +48,7 @@ class GaussianDiffusion:
             else cosine_betas(num_diffusion_timesteps)
         )
 
-        self.steps: None | torch.Tensor = None
+        self.steps: Optional[torch.Tensor] = None
         if self.timestep_respacing is not None:
             # https://arxiv.org/pdf/2102.09672.pdf Section 4
             self.steps = torch.linspace(
@@ -145,7 +145,7 @@ class GaussianDiffusion:
 
         return x_t
 
-    def call_model(self, x_t: torch.Tensor, t: torch.Tensor, y: torch.Tensor | None) -> torch.Tensor:
+    def call_model(self, x_t: torch.Tensor, t: torch.Tensor, y: Optional[torch.Tensor] = None) -> torch.Tensor:
         assert x_t.shape[0] == t.shape[0]
         if self.steps is not None:
             # In case we use re-spacing, pick the correct corresponding t
@@ -173,7 +173,7 @@ class GaussianDiffusion:
         self,
         x_t: torch.Tensor,
         t: int,
-        y: torch.Tensor | None = None,
+        y: Optional[torch.Tensor] = None,
         pred_x_0: bool = True,
     ) -> torch.Tensor:
         """
@@ -233,7 +233,7 @@ class GaussianDiffusion:
         return x_prev
 
     def ddim_denoise_at_t(
-        self, x_t: torch.Tensor, t: int, y: torch.Tensor | None = None, eta: float = 0.0
+        self, x_t: torch.Tensor, t: int, y: Optional[torch.Tensor] = None, eta: float = 0.0
     ) -> torch.Tensor:
         """
         DDDIM reverse process pθ(x_{t-1} | x_{t})
@@ -279,9 +279,9 @@ class GaussianDiffusion:
 
     def denoise(
         self,
-        x_0: torch.Tensor | None = None,
+        x_0: Optional[torch.Tensor] = None,
         batch_size: int = 1,
-        y: torch.Tensor | None = None,
+        y: Optional[torch.Tensor] = None,
         use_ddim: bool = False,
     ) -> Iterator[dict]:
         if x_0 is not None:

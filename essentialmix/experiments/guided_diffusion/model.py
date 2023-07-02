@@ -4,6 +4,8 @@
 import math
 from abc import abstractmethod
 
+from typing import Optional
+
 import torch
 import torch as th
 import torch.nn as nn
@@ -454,7 +456,7 @@ class AttentionPool2d(nn.Module):
         spacial_dim: int,
         embed_dim: int,
         num_heads_channels: int,
-        output_dim: int | None = None,
+        output_dim: Optional[int] = None,
     ):
         super().__init__()
         self.positional_embedding = nn.Parameter(th.randn(embed_dim, spacial_dim**2 + 1) / embed_dim**0.5)
