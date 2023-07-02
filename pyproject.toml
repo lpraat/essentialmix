@@ -31,6 +31,7 @@ dev = [
     "black",
     "mypy",
     "pre-commit",
+    "pydocstyle",
     "pytest",
     "ruff",
 ]
@@ -45,14 +46,15 @@ line-length = 120
 [tool.setuptools]
 packages = ["essentialmix"]
 
-#[project.scripts]
-#cli-name = "mypkg.mymodule:some_func"
-
 [tool.mypy]
 ignore_missing_imports = true
 check_untyped_defs = true
 disallow_untyped_defs = true
 scripts_are_modules = true
+disable_error_code = [
+    # Allow Type[T] where T is abc.ABC
+    "type-abstract"
+]
 
 [tool.ruff]
 select = ["E", "F", "I"]
@@ -60,7 +62,11 @@ ignore = [
     "E501"  # Line too long
 ]
 
-fixable = ["A", "B", "C", "D", "E", "F", "G", "I", "N", "Q", "S", "T", "W", "ANN", "ARG", "BLE", "COM", "DJ", "DTZ", "EM", "ERA", "EXE", "FBT", "ICN", "INP", "ISC", "NPY", "PD", "PGH", "PIE", "PL", "PT", "PTH", "PYI", "RET", "RSE", "RUF", "SIM", "SLF", "TCH", "TID", "TRY", "UP", "YTT"]
+fixable = [
+    "A", "B", "C", "D", "E", "F", "G", "I", "N", "Q", "S", "T", "W", "ANN", "ARG", "BLE", "COM", "DJ", "DTZ", "EM",
+    "ERA", "EXE", "FBT", "ICN", "INP", "ISC", "NPY", "PD", "PGH", "PIE", "PL", "PT", "PTH", "PYI", "RET", "RSE", "RUF",
+    "SIM", "SLF", "TCH", "TID", "TRY", "UP", "YTT"
+]
 unfixable = []
 
 exclude = [
@@ -100,3 +106,9 @@ target-version = "py310"
 
 [tool.ruff.mccabe]
 max-complexity = 10
+
+[tool.pydocstyle]
+convention = "google"
+
+[tool.ruff.pydocstyle]
+convention = "google"
