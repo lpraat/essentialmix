@@ -14,7 +14,7 @@ from einops import einsum, rearrange
 from typing_extensions import Self
 
 from essentialmix.core.layers import left_to_right_attention_mask
-from essentialmix.core.llm import LanguageModel, LanguageModelOutput
+from essentialmix.core.lm.torch_lm import TorchLanguageModel, TorchLanguageModelOutput
 from essentialmix.core.log import Logger
 
 logger = Logger.from_name(__name__)
@@ -227,18 +227,17 @@ class GPT2(nn.Module):
         return model
 
 
-class GPT2LanguageModel(LanguageModel):
-    def __init__(self, model: GPT2) -> None:
-        super().__init__()
-        self.model: GPT2 = model
-
-    @classmethod
-    def from_pretrained(cls, name: str) -> Self:
-        return cls(GPT2.from_pretrained(name))
+class GPT2LanguageModel(TorchLanguageModel):
+    def __init__(self, model: GPT2):
+        self.model = model
 
     @property
     def ctx_len(self) -> int:
         return self.model.ctx_len
 
-    def __call__(self, token_indices: torch.Tensor, logits_indices: torch.Tensor) -> LanguageModelOutput:
-        return LanguageModelOutput(logits=self.model(token_indices, logits_indices))
+    @classmethod
+    def from_pretrained(cls, name: str) -> Self:
+        return cls(GPT2.from_pretrained(name))
+
+    def __call__(self, token_indices: torch.Tensor, logits_indices: Optional[torch.Tensor]) -> TorchLanguageModelOutput:
+        return TorchLanguageModelOutput(logits=self.model(token_indices, logits_indices))
